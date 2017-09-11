@@ -46,6 +46,16 @@
 
 namespace {
 
+// These correspond to certain command-line arguments
+enum ReductionType
+{
+  None = 0,
+  FirstNonzero,
+  AllUnique,
+  MinValue,
+  MaxValue
+};
+
 // print the version
 void dicomtocsv_version(FILE *file, const char *cp)
 {
@@ -68,6 +78,8 @@ void dicomtocsv_usage(FILE *file, const char *cp)
     "  -o <data.csv>     Provide a file for the query results.\n"
     "  --first-nonzero   Search series for first nonzero value of each key.\n"
     "  --all-unique      Report all unique values within each series.\n"
+    "  --min-value       Report the minimum value within each series.\n"
+    "  --max-value       Report the maximum value within each series.\n"
     "  --directory-only  Use directory scan only, do not re-scan files.\n"
     "  --ignore-dicomdir Ignore the DICOMDIR file even if it is present.\n"
     "  --charset <cs>    Charset to use if SpecificCharacterSet is missing.\n"
@@ -439,7 +451,7 @@ struct SearchState {
 // Write out the results in csv format
 void dicomtocsv_write(vtkDICOMDirectory *finder,
   const vtkDICOMItem& query, const QueryTagList *ql, FILE *fp,
-  int level, bool firstNonZero, bool allUnique, bool useDirectoryRecords,
+  int level, ReductionType rt, bool useDirectoryRecords,
   vtkCommand *p)
 {
   // for keeping track of progress
@@ -494,7 +506,7 @@ void dicomtocsv_write(vtkDICOMDirectory *finder,
       else
       {
         meta = vtkSmartPointer<vtkDICOMMetaData>::New();
-        if (level >= 4 || firstNonZero || allUnique)
+        if (level >= 4 || rt != None)
         {
           // need to parse all files
           meta->SetNumberOfInstances(a->GetNumberOfValues());
@@ -534,6 +546,7 @@ void dicomtocsv_write(vtkDICOMDirectory *finder,
 
           vtkDICOMTagPath tagPath = ql->at(i);
           std::string s;
+          double d = 0.0;
           bool isNumber = true;
           bool found = false;
           bool done = false;
@@ -628,7 +641,7 @@ void dicomtocsv_write(vtkDICOMDirectory *finder,
                     isNumber = false;
                   }
 
-                  if (allUnique)
+                  if (rt == AllUnique)
                   {
                     if (!found || unique_value(t, s))
                     {
@@ -641,13 +654,35 @@ void dicomtocsv_write(vtkDICOMDirectory *finder,
                       s += t;
                     }
                   }
-                  else if (firstNonZero && vptr->GetVR().HasNumericValue())
+                  else if (vptr->GetVR().HasNumericValue())
                   {
-                    // if a non-zero value is found, then break
-                    found = true;
-                    s = t;
-                    if (vptr->AsDouble() != 0.0)
+                    if (!found)
                     {
+                      s = t;
+                      found = true;
+                    }
+                    else if (rt == MinValue)
+                    {
+                      double f = vptr->AsDouble();
+                      if (f < d)
+                      {
+                        d = f;
+                        s = t;
+                      }
+                    }
+                    else if (rt == MaxValue)
+                    {
+                      double f = vptr->AsDouble();
+                      if (f > d)
+                      {
+                        d = f;
+                        s = t;
+                      }
+                    }
+                    if (rt == FirstNonZero && vptr->AsDouble() != 0.0)
+                    {
+                      // if a non-zero value is found, then break
+                      s = t;
                       done = true;
                       break;
                     }
@@ -657,7 +692,7 @@ void dicomtocsv_write(vtkDICOMDirectory *finder,
                     // output the value
                     s = t;
                     found = true;
-                    if (!firstNonZero || vptr->GetVL() != 0)
+                    if (!firstNonzero || vptr->GetVL() != 0)
                     {
                       done = true;
                       break;
@@ -749,8 +784,7 @@ int MAINMACRO(int argc, char *argv[])
   QueryTagList qtlist;
   vtkDICOMItem query;
   std::vector<std::string> oplist;
-  bool firstNonZero = false;
-  bool allUnique = false;
+  ReductionType rt = None;
   bool useDirectoryRecords = false;
   bool ignoreDicomdir = false;
   vtkDICOMCharacterSet charset;
@@ -843,11 +877,19 @@ int MAINMACRO(int argc, char *argv[])
     }
     else if (strcmp(arg, "--first-nonzero") == 0)
     {
-      firstNonZero = true;
+      rt = FirstNonzero;
     }
     else if (strcmp(arg, "--all-unique") == 0)
     {
-      allUnique = true;
+      rt = AllUnique;
+    }
+    else if (strcmp(arg, "--min-value") == 0)
+    {
+      rt = MinValue;
+    }
+    else if (strcmp(arg, "--max-value") == 0)
+    {
+      rt = MaxValue;
     }
     else if (strcmp(arg, "--directory-only") == 0)
     {
@@ -1017,8 +1059,7 @@ int MAINMACRO(int argc, char *argv[])
       p->SetText("Writing");
     }
     dicomtocsv_write(
-      finder, query, &qtlist, fp, level,
-      firstNonZero, allUnique, useDirectoryRecords, p);
+      finder, query, &qtlist, fp, level, rt, useDirectoryRecords, p);
 
     fflush(fp);
   }
